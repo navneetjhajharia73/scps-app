@@ -12,6 +12,7 @@ name: Deploy to SPCS (Dev)
 # BAAKI SAB SNOWFLAKE SE AATA HAI:
 #   Role, Database, Schema, Warehouse → User defaults se
 #   Service names, Image paths        → PIPELINE_CONFIG table se
+#   Registry URL                      → CURRENT_ORGANIZATION_NAME() + CURRENT_ACCOUNT_NAME() se
 #
 # ============================================================
 # 🏢 COMPANY: OIDC section uncomment karo, key-pair hataao
@@ -149,15 +150,38 @@ jobs:
           echo "FRONTEND_SVC=$(get_config FRONTEND_SERVICE)" >> $GITHUB_ENV
           echo "BACKEND_IMG=$(get_config BACKEND_IMAGE)" >> $GITHUB_ENV
           echo "FRONTEND_IMG=$(get_config FRONTEND_IMAGE)" >> $GITHUB_ENV
-          echo "REGISTRY=${{ secrets.SNOWFLAKE_ACCOUNT }}.registry.snowflakecomputing.com" >> $GITHUB_ENV
 
           echo "✅ Config loaded from Snowflake"
 
       # ============================================================
+      # STEP 5.5: Registry URL Snowflake se dynamically nikalo
+      # ============================================================
+      # SNOWFLAKE_ACCOUNT secret sirf CLI connection ke liye hai
+      # (usually legacy account LOCATOR, jaise FR94756).
+      #
+      # Docker registry ko ACCOUNT LOCATOR se nahi, balki
+      # organization-name + account-name (org-account format,
+      # jaise lhqalmc-tr01093) se banaya jaata hai.
+      #
+      # Isliye registry URL ko koi secret/hardcode se nahi,
+      # Snowflake ke CURRENT_ORGANIZATION_NAME() aur
+      # CURRENT_ACCOUNT_NAME() se hi derive karte hain.
+      # ============================================================
+      - name: Get Registry URL from Snowflake
+        run: |
+          ORG_NAME=$(snow sql -q "SELECT CURRENT_ORGANIZATION_NAME() AS ORG_NAME;" \
+            --format=json | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['ORG_NAME'].lower())")
+          ACCOUNT_NAME=$(snow sql -q "SELECT CURRENT_ACCOUNT_NAME() AS ACCOUNT_NAME;" \
+            --format=json | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['ACCOUNT_NAME'].lower())")
+
+          echo "REGISTRY=${ORG_NAME}-${ACCOUNT_NAME}.registry.snowflakecomputing.com" >> $GITHUB_ENV
+          echo "✅ Registry resolved: ${ORG_NAME}-${ACCOUNT_NAME}.registry.snowflakecomputing.com"
+
+      # ============================================================
       # STEP 6: Docker login to Snowflake registry
       # ============================================================
-      # snow CLI internally SNOWFLAKE_ACCOUNT se registry URL
-      # banata hai aur authenticate karta hai
+      # snow CLI current session (role/account) se registry
+      # token banata hai aur authenticate karta hai
       # ============================================================
       - name: Docker Login to Snowflake Registry
         run: snow spcs image-registry login
