@@ -94,6 +94,7 @@ jobs:
           private_key_file = "~/.snowflake/rsa_key.p8"
           EOF
 
+          chmod 600 ~/.snowflake/config.toml
       # ---- 🏢 COMPANY: OIDC auth (ye use karo, upar wala hataao) ----
       # - name: Configure Snowflake (OIDC)
       #   run: |
