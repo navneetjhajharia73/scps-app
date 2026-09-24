@@ -15,6 +15,26 @@ spec:
             objectName: spcs_app_db.app_schema.app_config_schema
           secretKeyRef: secret_string
           envVarName: SNOWFLAKE_SCHEMA
+        - snowflakeSecret:
+            objectName: spcs_app_db.app_schema.sso_provider
+          secretKeyRef: secret_string
+          envVarName: SSO_PROVIDER
+        - snowflakeSecret:
+            objectName: spcs_app_db.app_schema.sso_client_id
+          secretKeyRef: secret_string
+          envVarName: SSO_CLIENT_ID
+        - snowflakeSecret:
+            objectName: spcs_app_db.app_schema.sso_client_secret
+          secretKeyRef: secret_string
+          envVarName: SSO_CLIENT_SECRET
+        - snowflakeSecret:
+            objectName: spcs_app_db.app_schema.sso_issuer_url
+          secretKeyRef: secret_string
+          envVarName: SSO_ISSUER_URL
+        - snowflakeSecret:
+            objectName: spcs_app_db.app_schema.sso_redirect_uri
+          secretKeyRef: secret_string
+          envVarName: SSO_REDIRECT_URI
       readinessProbe:
         port: 8000
         path: /health
@@ -28,17 +48,3 @@ spec:
   endpoints:
     - name: backend-endpoint
       port: 8000
-
-
-
-openssl genrsa 2048 | openssl pkcs8 -topk8 -inform PEM -out rsa_key.p8 -nocrypt
-
-
-cat rsa_key.p8
-
-openssl rsa -in rsa_key.p8 -pubout -out rsa_key.pub
-
-cat rsa_key.pub
-
-
-grep -v "BEGIN\|END" rsa_key.pub | tr -d '\n'
