@@ -1,0 +1,44 @@
+spec:
+  containers:
+    - name: backend
+      image: /spcs_app_db/app_schema/app_images/spcs-backend:latest
+      secrets:
+        - snowflakeSecret:
+            objectName: spcs_app_db.app_schema.app_config_warehouse
+          secretKeyRef: secret_string
+          envVarName: SNOWFLAKE_WAREHOUSE
+        - snowflakeSecret:
+            objectName: spcs_app_db.app_schema.app_config_database
+          secretKeyRef: secret_string
+          envVarName: SNOWFLAKE_DATABASE
+        - snowflakeSecret:
+            objectName: spcs_app_db.app_schema.app_config_schema
+          secretKeyRef: secret_string
+          envVarName: SNOWFLAKE_SCHEMA
+      readinessProbe:
+        port: 8000
+        path: /health
+      resources:
+        requests:
+          memory: "512Mi"
+          cpu: "0.5"
+        limits:
+          memory: "1Gi"
+          cpu: "1"
+  endpoints:
+    - name: backend-endpoint
+      port: 8000
+
+
+
+openssl genrsa 2048 | openssl pkcs8 -topk8 -inform PEM -out rsa_key.p8 -nocrypt
+
+
+cat rsa_key.p8
+
+openssl rsa -in rsa_key.p8 -pubout -out rsa_key.pub
+
+cat rsa_key.pub
+
+
+grep -v "BEGIN\|END" rsa_key.pub | tr -d '\n'

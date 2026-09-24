@@ -1,0 +1,18 @@
+spec:
+  containers:
+    - name: frontend
+      image: /spcs_app_db/app_schema/app_images/spcs-frontend:latest
+      readinessProbe:
+        port: 3000
+        path: /
+      resources:
+        requests:
+          memory: "256Mi"
+          cpu: "0.25"
+        limits:
+          memory: "512Mi"
+          cpu: "0.5"
+  endpoints:
+    - name: frontend-endpoint
+      port: 3000
+      public: true

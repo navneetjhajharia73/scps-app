@@ -1,0 +1,216 @@
+name: Deploy to SPCS (Dev)
+
+# ============================================================
+# KAB CHALEGI:
+# - main branch pe push hone pe
+# - ya manually trigger (Actions tab → Run workflow)
+#
+# GITHUB MEIN SIRF 2 SECRETS:
+#   SNOWFLAKE_ACCOUNT     → Snowflake se connect karne ke liye
+#   SNOWFLAKE_PRIVATE_KEY → Authentication proof
+#
+# BAAKI SAB SNOWFLAKE SE AATA HAI:
+#   Role, Database, Schema, Warehouse → User defaults se
+#   Service names, Image paths        → PIPELINE_CONFIG table se
+#
+# ============================================================
+# 🏢 COMPANY: OIDC section uncomment karo, key-pair hataao
+# 🧪 TRIAL:   Key-pair use karo (current setup)
+# ============================================================
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# ============================================================
+# 🏢 COMPANY: OIDC ke liye ye uncomment karo
+# permissions:
+#   id-token: write
+#   contents: read
+# ============================================================
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ============================================================
+      # STEP 1: Code checkout
+      # ============================================================
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ============================================================
+      # STEP 2: Docker images build
+      # ============================================================
+      # --platform linux/amd64 zaroori hai
+      # SPCS sirf linux/amd64 support karta hai
+      # Mac M1/M2 pe bina iske ARM image banegi jo SPCS pe nahi chalegi
+      # ============================================================
+      - name: Build Backend Image
+        run: |
+          docker build --platform linux/amd64 \
+            -t spcs-backend:${{ github.sha }} \
+            -t spcs-backend:latest \
+            ./backend
+
+      - name: Build Frontend Image
+        run: |
+          docker build --platform linux/amd64 \
+            -t spcs-frontend:${{ github.sha }} \
+            -t spcs-frontend:latest \
+            ./frontend
+
+      # ============================================================
+      # STEP 3: Snowflake CLI setup
+      # ============================================================
+      # Sirf 2 cheezein GitHub se: ACCOUNT + PRIVATE_KEY
+      # Role/Database/Warehouse nahi de rahe config mein
+      # Snowflake user defaults se auto set hoga
+      #
+      # User defaults Snowflake mein set hain:
+      #   ALTER USER GITHUB_CI_USER SET
+      #     DEFAULT_ROLE = SPCS_DEPLOYMENT_ROLE
+      #     DEFAULT_WAREHOUSE = SPCS_APP_WH
+      #     DEFAULT_NAMESPACE = SPCS_APP_DB.APP_SCHEMA;
+      # ============================================================
+      - name: Install Snowflake CLI
+        run: pip install snowflake-cli
+
+      # ---- 🧪 TRIAL: Key-pair auth ----
+      - name: Configure Snowflake (Key-Pair)
+        run: |
+          mkdir -p ~/.snowflake
+
+          echo '${{ secrets.SNOWFLAKE_PRIVATE_KEY }}' > ~/.snowflake/rsa_key.p8
+          chmod 600 ~/.snowflake/rsa_key.p8
+
+          cat > ~/.snowflake/config.toml << EOF
+          [connections.default]
+          account = "${{ secrets.SNOWFLAKE_ACCOUNT }}"
+          user = "GITHUB_CI_USER"
+          authenticator = "SNOWFLAKE_JWT"
+          private_key_file = "~/.snowflake/rsa_key.p8"
+          EOF
+
+      # ---- 🏢 COMPANY: OIDC auth (ye use karo, upar wala hataao) ----
+      # - name: Configure Snowflake (OIDC)
+      #   run: |
+      #     mkdir -p ~/.snowflake
+      #     cat > ~/.snowflake/config.toml << EOF
+      #     [connections.default]
+      #     account = "${{ secrets.SNOWFLAKE_ACCOUNT }}"
+      #     user = "GITHUB_CI_USER"
+      #     authenticator = "SNOWFLAKE_JWT"
+      #     EOF
+      #
+      # - name: Get OIDC Token
+      #   run: snow auth oidc read-token
+
+      # ============================================================
+      # STEP 4: Verify Snowflake connection
+      # ============================================================
+      # Ye confirm karta hai:
+      # - Login ho raha hai (key-pair / OIDC kaam kar raha hai)
+      # - User defaults sahi set hain (role, database, warehouse)
+      # ============================================================
+      - name: Verify Connection
+        run: |
+          snow sql -q "SELECT CURRENT_USER(), CURRENT_ROLE(), CURRENT_DATABASE(), CURRENT_SCHEMA(), CURRENT_WAREHOUSE();"
+
+      # ============================================================
+      # STEP 5: Load config from Snowflake
+      # ============================================================
+      # PIPELINE_CONFIG table se sab values aa rahi hain:
+      #   - Registry repo path
+      #   - Service names
+      #   - Image names
+      #
+      # Config change karna ho toh Snowflake mein UPDATE karo
+      # Pipeline auto pick karegi — koi code change nahi
+      #
+      # SQL:
+      #   UPDATE PIPELINE_CONFIG SET config_value = 'NEW_VALUE'
+      #   WHERE config_key = 'BACKEND_SERVICE';
+      # ============================================================
+      - name: Load Config from Snowflake
+        run: |
+          get_config() {
+            snow sql -q "SELECT config_value FROM PIPELINE_CONFIG WHERE config_key='$1';" \
+              --format=json | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['CONFIG_VALUE'])"
+          }
+
+          echo "REPO_PATH=$(get_config REGISTRY_REPO_PATH)" >> $GITHUB_ENV
+          echo "BACKEND_SVC=$(get_config BACKEND_SERVICE)" >> $GITHUB_ENV
+          echo "FRONTEND_SVC=$(get_config FRONTEND_SERVICE)" >> $GITHUB_ENV
+          echo "BACKEND_IMG=$(get_config BACKEND_IMAGE)" >> $GITHUB_ENV
+          echo "FRONTEND_IMG=$(get_config FRONTEND_IMAGE)" >> $GITHUB_ENV
+          echo "REGISTRY=${{ secrets.SNOWFLAKE_ACCOUNT }}.registry.snowflakecomputing.com" >> $GITHUB_ENV
+
+          echo "✅ Config loaded from Snowflake"
+
+      # ============================================================
+      # STEP 6: Docker login to Snowflake registry
+      # ============================================================
+      # snow CLI internally SNOWFLAKE_ACCOUNT se registry URL
+      # banata hai aur authenticate karta hai
+      # ============================================================
+      - name: Docker Login to Snowflake Registry
+        run: snow spcs image-registry login
+
+      # ============================================================
+      # STEP 7: Push images
+      # ============================================================
+      # 2 tags push karte hain:
+      # - github.sha = unique per commit (rollback ke liye)
+      # - latest = hamesha newest version
+      # ============================================================
+      - name: Push Backend Image
+        run: |
+          IMAGE=${{ env.REGISTRY }}${{ env.REPO_PATH }}/${{ env.BACKEND_IMG }}
+          docker tag spcs-backend:${{ github.sha }} $IMAGE:${{ github.sha }}
+          docker tag spcs-backend:latest $IMAGE:latest
+          docker push $IMAGE:${{ github.sha }}
+          docker push $IMAGE:latest
+          echo "✅ Backend pushed"
+
+      - name: Push Frontend Image
+        run: |
+          IMAGE=${{ env.REGISTRY }}${{ env.REPO_PATH }}/${{ env.FRONTEND_IMG }}
+          docker tag spcs-frontend:${{ github.sha }} $IMAGE:${{ github.sha }}
+          docker tag spcs-frontend:latest $IMAGE:latest
+          docker push $IMAGE:${{ github.sha }}
+          docker push $IMAGE:latest
+          echo "✅ Frontend pushed"
+
+      # ============================================================
+      # STEP 8: Deploy services
+      # ============================================================
+      # SPCS mein "use new image" direct nahi hai.
+      # Suspend → Resume karne pe latest image pull hogi.
+      # || true = agar service pehle se suspended hai toh error ignore
+      # ============================================================
+      - name: Deploy Services
+        run: |
+          snow sql -q "ALTER SERVICE ${{ env.BACKEND_SVC }} SUSPEND;" || true
+          snow sql -q "ALTER SERVICE ${{ env.FRONTEND_SVC }} SUSPEND;" || true
+          sleep 5
+          snow sql -q "ALTER SERVICE ${{ env.BACKEND_SVC }} RESUME;"
+          snow sql -q "ALTER SERVICE ${{ env.FRONTEND_SVC }} RESUME;"
+          echo "✅ Services restarted"
+
+      # ============================================================
+      # STEP 9: Verify deployment
+      # ============================================================
+      # 30 sec wait — container start hone mein time lagta hai
+      # Status READY = ✅ sab theek
+      # Status PENDING = image pull ho raha hai
+      # Status FAILED = logs dekho
+      # ============================================================
+      - name: Verify Deployment
+        run: |
+          sleep 30
+          snow sql -q "SELECT SYSTEM\$GET_SERVICE_STATUS('${{ env.BACKEND_SVC }}');"
+          snow sql -q "SELECT SYSTEM\$GET_SERVICE_STATUS('${{ env.FRONTEND_SVC }}');"
+          echo "✅ Deployment verified"
