@@ -6,5 +6,3 @@ __pycache__/
 .venv
 *.tar.gz
 .DS_Store
-rsa_key.p8
-rsa_key.pub
