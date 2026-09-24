@@ -80,6 +80,8 @@ jobs:
 
       # ---- 🧪 TRIAL: Key-pair auth ----
       - name: Configure Snowflake (Key-Pair)
+        env:
+          SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SNOWFLAKE_PRIVATE_KEY }}
         run: |
           mkdir -p ~/.snowflake
 
